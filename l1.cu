@@ -1,25 +1,4 @@
-#include <iostream>
-#include <stdio.h>
-
-void printArray(const float *array, int size) {
-  printf("[");
-  for (int i = 0; i < size; i++) {
-    printf("%.2f", array[i]);  // Changed %d to %.2f for floating-point numbers
-    if (i < size - 1) {
-      printf(", ");
-    }
-  }
-  printf("]\n");
-}
-
-
-template <typename T>
-__global__ void cuda_axpy(const int n, const T a, const T* x, const int incx, T* y, const int incy) {
-  int i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (i < n) {
-    y[i*incy] = a*x[i*incx] + y[i*incy];
-  }
-}
+#include "l1.cuh"
 
 
 void saxpy(const int n, const float a, const float* x, const int incx, float* y, const int incy) {
@@ -45,29 +24,26 @@ void saxpy(const int n, const float a, const float* x, const int incx, float* y,
   cudaMemcpy(y, d_y, n * sizeof(float), cudaMemcpyDeviceToHost);
 }
 
-template <typename T>
-__global__ void cuda_asum(const T* d_x, T* d_partial_sums, int n) {
-  extern __shared__ T shared_data[];
-  int tid = threadIdx.x;
-  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+void sscal(const int n, const float a, float* x, const int incx) {
+  int block_size = 256;
+  int grid_size = (n + block_size - 1) / block_size;
 
-  // Initialize shared memory
-  shared_data[tid] = (idx < n) ? fabsf(d_x[idx]) : 0.0f;
-  __syncthreads();
+  float* d_x;
 
-  // Perform reduction in shared memory
-  for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
-    if (tid < stride) {
-      shared_data[tid] += shared_data[tid + stride];
-    }
-    __syncthreads();
-  }
+  // Allocate device memory
+  cudaMalloc((void**)&d_x, n * sizeof(float));
 
-  // Write the block's partial sum to global memory
-  if (tid == 0) {
-      d_partial_sums[blockIdx.x] = shared_data[0];
-  }
+  // Copy data to device
+  cudaMemcpy(d_x, x, n * sizeof(float), cudaMemcpyHostToDevice);
+
+  cuda_scal<<<grid_size, block_size>>>(n, a, d_x, incx);
+
+  cudaDeviceSynchronize();
+
+  // Copy result back to host
+  cudaMemcpy(x, d_x, n * sizeof(float), cudaMemcpyDeviceToHost);
 }
+
 
 float sasum(const float* h_x, int n) {
   const int BLOCK_SIZE = 256;  // Number of threads per block
@@ -99,24 +75,4 @@ float sasum(const float* h_x, int n) {
   cudaFree(d_partial_sums);
 
   return result;
-}
-
-int main() {
-  const int n = 10;
-  const float a = 1;
-  const float x[n] = {1,2,-3,4,5,6,7,8,-9,10};
-  const int incx = 1;
-  float y[n] = {2,1,2,1,2,1,2,1,2,1}; 
-  const int incy = 1;
-
-  //printArray(x, n);
-  //printArray(y, n);
-
-
-  float val = sasum(x,n);
-  std::cout<<"val: "<<val<<std::endl;
- // printArray(y, n);
-
-
-  return 0;
 }
